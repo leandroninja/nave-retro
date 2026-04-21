@@ -392,6 +392,7 @@ class Game:
     CONTINUE_PROMPT = 4
     GAME_OVER       = 5
     VICTORY         = 6
+    CUTSCENE        = 7
 
     def __init__(self):
         self.highscore = load_hs()
@@ -474,6 +475,10 @@ class Game:
                     self._init_game(); self.state = self.PLAYING
                 if self.state == self.VICTORY and k == pygame.K_RETURN:
                     self._init_game(); self.state = self.MENU
+                if self.state == self.CUTSCENE and k == pygame.K_RETURN:
+                    save_hs(self.score)
+                    self.highscore = max(self.highscore, self.score)
+                    self.state = self.VICTORY
                 if self.state == self.CONTINUE_PROMPT:
                     if k in (pygame.K_s, pygame.K_RETURN, pygame.K_y):
                         self.lives = 10
@@ -508,6 +513,10 @@ class Game:
             self.continue_countdown -= 1
             if self.continue_countdown <= 0:
                 self.state = self.MENU
+            return
+
+        if self.state == self.CUTSCENE:
+            self._update_cutscene()
             return
 
         if self.state != self.PLAYING:
@@ -575,8 +584,11 @@ class Game:
             self._play('boss_death')
             self.score += 500 + self.phase_idx*150
             self.boss = None
-            self.state = self.PHASE_CLEAR
-            self.state_timer = FPS*3
+            if self.phase_idx == 9:
+                self._start_cutscene()
+            else:
+                self.state = self.PHASE_CLEAR
+                self.state_timer = FPS*3
 
     # ── Lógica ────────────────────────────────────────────────────────────────
     def _player_shoot(self):
@@ -897,6 +909,7 @@ class Game:
         elif self.state==self.CONTINUE_PROMPT:  self._draw_continue()
         elif self.state==self.GAME_OVER:        self._draw_game_over()
         elif self.state==self.VICTORY:          self._draw_victory()
+        elif self.state==self.CUTSCENE:         self._draw_cutscene()
         screen.blit(_scanline,(0,0))
         pygame.display.flip()
 
@@ -1010,6 +1023,179 @@ class Game:
         glow_text(screen,"TODOS OS 10 SETORES LIBERTADOS",_font_md,c,W//2,H//2-28,center=True)
         glow_text(screen,f"PONTUAÇÃO FINAL: {self.score:07d}",_font_md,c,W//2,H//2+18,center=True)
         glow_text(screen,"ENTER — MENU PRINCIPAL",_font_sm,dim(c,0.55),W//2,H//2+68,center=True)
+
+    # ── Cutscene final ────────────────────────────────────────────────────────
+    def _start_cutscene(self):
+        self.state    = self.CUTSCENE
+        self.cs_t     = 0.0
+        self.cs_scene = 0
+        self.cs_bx    = float(W // 2)
+        self.cs_by    = 130.0
+        self.cs_rings = []
+
+    def _update_cutscene(self):
+        dt = 1.0 / FPS
+        self.cs_t += dt
+        t = self.cs_t
+        BREAKS = [4.0, 8.0, 14.0, 20.0, 25.0]
+        self.cs_scene = len([b for b in BREAKS if t >= b])
+
+        for p in self.particles:
+            p[0]+=p[2]; p[1]+=p[3]; p[4]-=dt
+        self.particles = [p for p in self.particles if p[4]>0]
+
+        if self.cs_scene == 0:
+            if random.random() < 0.35:
+                ox=random.uniform(-55,55); oy=random.uniform(-35,35)
+                spawn_particles(self.particles, self.cs_bx+ox, self.cs_by+oy,
+                                PHASES[9]['ui'], n=10, spd=4)
+        elif self.cs_scene == 1:
+            local_t = t - 4.0
+            if int(local_t*3)%2==0 and len(self.cs_rings)<6:
+                self.cs_rings.append([W//2, H//2, 0.0, 220.0, (180,0,255)])
+            for r in self.cs_rings: r[2]+=3.5
+            self.cs_rings=[r for r in self.cs_rings if r[2]<r[3]]
+        elif self.cs_scene == 2:
+            if random.random()<0.25:
+                self.cs_rings.append([W//2, H//2, 0.0, 360.0, PHASES[9]['ui']])
+            for r in self.cs_rings: r[2]+=6.0
+            self.cs_rings=[r for r in self.cs_rings if r[2]<r[3]]
+
+        update_stars(self.stars)
+
+        if t >= 30.0:
+            save_hs(self.score)
+            self.highscore = max(self.highscore, self.score)
+            self.state = self.VICTORY
+
+    def _draw_cutscene(self):
+        t = self.cs_t; scene = self.cs_scene
+        c_f = PHASES[9]['ui']   # ciano
+        c_v = (180, 0, 255)     # violeta
+
+        if scene < 5:
+            screen.fill(PHASES[9]['bg'])
+            draw_stars(screen, self.stars, PHASES[9]['star'])
+        else:
+            screen.fill((0,0,0))
+
+        if scene == 0:
+            local_t = t
+            hp_frac = max(0.0, 1.0 - local_t/4.0)
+            draw_boss(screen, int(self.cs_bx), int(self.cs_by),
+                      dim(c_f, 0.35+0.55*hp_frac), int(800*hp_frac), 9,
+                      flash=(1 if int(local_t*8)%3==0 else 0))
+            for p in self.particles:
+                a=p[4]/p[5]; col=dim(p[6],a)
+                sx,sy=int(p[0]),int(p[1])
+                if 0<=sx<W and 0<=sy<H: screen.set_at((sx,sy),col)
+            if int(t*2)%2:
+                glow_text(screen,"SETOR ZERO — BATALHA FINAL",
+                          _font_md,c_f,W//2,H//2+55,center=True)
+            glow_text(screen,"SOBERANO ZERO — DESTRUÍDO",
+                      _font_sm,dim(c_f,0.45),W//2,H//2+84,center=True)
+            if local_t>3.2:
+                alpha=int(min(200,(local_t-3.2)*130))
+                fs=pygame.Surface((W,H),pygame.SRCALPHA)
+                fs.fill((*dim(c_f,0.35),alpha)); screen.blit(fs,(0,0))
+
+        elif scene == 1:
+            local_t = t-4.0
+            pulse = math.sin(local_t*5)*0.5+0.5
+            draw_boss(screen, int(self.cs_bx), int(self.cs_by),
+                      dim(c_v, 0.3+0.5*pulse), 10, 9)
+            for r in self.cs_rings:
+                prog=r[2]/r[3]; alpha=int((1.0-prog)*160)
+                s=pygame.Surface((W,H),pygame.SRCALPHA)
+                pygame.draw.circle(s,(*r[4],alpha),(W//2,H//2),max(1,int(r[2])),2)
+                screen.blit(s,(0,0))
+            if int(t*2)%2:
+                glow_text(screen,"DISPOSITIVO DIMENSIONAL",
+                          _font_md,c_v,W//2,H//2+65,center=True)
+                glow_text(screen,"ATIVADO",_font_md,c_v,W//2,H//2+94,center=True)
+
+        elif scene == 2:
+            local_t = t-8.0
+            scale = max(0.0, 1.0-local_t/6.0)
+            if scale>0.15:
+                draw_boss(screen,W//2,130,dim(c_v,scale*0.65),1,9)
+            for r in self.cs_rings:
+                prog=r[2]/r[3]; alpha=int((1.0-prog)*190)
+                s=pygame.Surface((W,H),pygame.SRCALPHA)
+                pygame.draw.circle(s,(*r[4],alpha),(W//2,H//2),max(1,int(r[2])),3)
+                screen.blit(s,(0,0))
+            if int(t*1.8)%2:
+                glow_text(screen,"RUPTURA DIMENSIONAL",
+                          _font_lg,c_f,W//2,H//2+90,center=True)
+
+        elif scene == 3:
+            local_t = t-14.0
+            bh_r=int(18+local_t*14)
+            for i in range(20):
+                ang=2*math.pi*i/20
+                r0=bh_r+8; r1=bh_r+28+int(math.sin(t*3.5+i)*10)
+                x1=W//2+int(r0*math.cos(ang)); y1=H//2+int(r0*math.sin(ang))
+                x2=W//2+int(r1*math.cos(ang)); y2=H//2+int(r1*math.sin(ang))
+                pygame.draw.line(screen,dim(c_f,0.22),(x1,y1),(x2,y2),1)
+            pygame.draw.circle(screen,(0,0,0),(W//2,H//2),bh_r)
+            pygame.draw.circle(screen,dim(c_f,0.5),(W//2,H//2),bh_r,2)
+            pull=min(1.0,local_t/6.0)
+            sx=int(W*0.78+(W//2-W*0.78)*pull)
+            sy=int(H*0.76+(H//2-H*0.76)*pull)
+            draw_player(screen,sx,sy,c_f)
+            if int(t*2)%2:
+                glow_text(screen,"PONTO DE NÃO RETORNO",
+                          _font_md,c_f,W//2,H-50,center=True)
+
+        elif scene == 4:
+            local_t = t-20.0
+            bh_r=min(W,int(110+local_t*45))
+            pygame.draw.circle(screen,(0,0,0),(W//2,H//2),bh_r)
+            if bh_r<W-10:
+                pygame.draw.circle(screen,dim(c_f,0.28),(W//2,H//2),bh_r,2)
+            if local_t<2.5:
+                frac=local_t/2.5; spiral_r=max(0,int(85*(1.0-frac)))
+                spiral_ang=local_t*7.0
+                sx=int(W//2+spiral_r*math.cos(spiral_ang))
+                sy=int(H//2+spiral_r*math.sin(spiral_ang))
+                draw_player(screen,sx,sy,dim(c_f,max(0.1,1.0-frac)))
+            if local_t>2.0:
+                flash_p=min(1.0,(local_t-2.0)/2.0)
+                fs=pygame.Surface((W,H),pygame.SRCALPHA)
+                fs.fill((255,255,255,int(flash_p*255))); screen.blit(fs,(0,0))
+            if local_t>4.0:
+                dark_p=min(1.0,(local_t-4.0)/1.0)
+                fs=pygame.Surface((W,H),pygame.SRCALPHA)
+                fs.fill((0,0,0,int(dark_p*255))); screen.blit(fs,(0,0))
+
+        elif scene == 5:
+            local_t = t-25.0
+            a1=min(255,int(local_t/1.5*255))
+            if a1>0:
+                s1=pygame.Surface((W,H),pygame.SRCALPHA)
+                img=_font_lg.render("FIM DO CAPÍTULO I",True,c_f)
+                s1.blit(img,(W//2-img.get_width()//2,H//2-70))
+                s1.set_alpha(a1); screen.blit(s1,(0,0))
+            a2=min(255,max(0,int((local_t-2.0)/1.5*255)))
+            if a2>0:
+                s2=pygame.Surface((W,H),pygame.SRCALPHA)
+                img2=_font_md.render("PULSAR: DIMENSÃO SETOR ZERO",True,dim(c_f,0.7))
+                s2.blit(img2,(W//2-img2.get_width()//2,H//2-5))
+                s2.set_alpha(a2); screen.blit(s2,(0,0))
+            a3=min(255,max(0,int((local_t-3.5)/1.2*255)))
+            if a3>0:
+                s3=pygame.Surface((W,H),pygame.SRCALPHA)
+                img3=_font_sm.render("A SAGA CONTINUA...",True,dim(c_f,0.55))
+                s3.blit(img3,(W//2-img3.get_width()//2,H//2+45))
+                s3.set_alpha(a3); screen.blit(s3,(0,0))
+            if local_t>4.0 and int(t*1.5)%2:
+                glow_text(screen,"ENTER — CONTINUAR",
+                          _font_sm,dim(c_f,0.35),W//2,H//2+110,center=True)
+
+        if scene<5 and int(t*1.5)%2:
+            glow_text(screen,"ENTER — PULAR",
+                      _font_sm,dim(c_f,0.3),W//2,H-22,center=True)
+        screen.blit(_scanline,(0,0))
 
 
 # ── Entrada ────────────────────────────────────────────────────────────────────
