@@ -315,6 +315,20 @@ def glow_text(surf, text, font, col, x, y, center=False):
     rx = x-img.get_width()//2 if center else x
     surf.blit(img, (rx, y))
 
+def _cs_text(surf, text, font, col, x, y, alpha=255, center=False):
+    """Glow text com controle de alpha para cutscene."""
+    w, h = font.size(text)
+    ts = pygame.Surface((w+6, h+4), pygame.SRCALPHA)
+    gc = dim(col, 0.28)
+    for dx,dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+        img = font.render(text, True, gc)
+        ts.blit(img, (3+dx, 2+dy))
+    img = font.render(text, True, col)
+    ts.blit(img, (3, 2))
+    ts.set_alpha(alpha)
+    rx = x - (w+6)//2 if center else x
+    surf.blit(ts, (rx, y))
+
 def spawn_particles(particles, x, y, col, n=16, spd=3.5):
     for _ in range(n):
         a = random.uniform(0,2*math.pi); s = random.uniform(0.5,spd)
@@ -1106,6 +1120,7 @@ class Game:
     CONTINUE_PROMPT = 4
     GAME_OVER       = 5
     VICTORY         = 6
+    CUTSCENE        = 7
 
     def __init__(self):
         self.highscore = load_hs()
@@ -1182,6 +1197,10 @@ class Game:
                 k = ev.key
                 if k == pygame.K_ESCAPE:
                     save_hs(self.score); pygame.quit(); sys.exit()
+                if self.state == self.CUTSCENE and k == pygame.K_RETURN:
+                    save_hs(self.score)
+                    self.highscore = max(self.highscore, self.score)
+                    self.state = self.VICTORY
                 if self.state == self.MENU and k == pygame.K_RETURN:
                     self.state = self.PLAYING
                 if self.state == self.GAME_OVER and k == pygame.K_RETURN:
@@ -1212,7 +1231,7 @@ class Game:
             if self.state_timer <= 0:
                 self.phase_idx += 1
                 if self.phase_idx >= 10:
-                    save_hs(self.score); self.state = self.VICTORY
+                    self._start_cutscene()
                 else:
                     self._start_phase(keep_player=True); self.state = self.PLAYING
             return
@@ -1222,6 +1241,10 @@ class Game:
             self.continue_countdown -= 1
             if self.continue_countdown <= 0:
                 self.state = self.MENU
+            return
+
+        if self.state == self.CUTSCENE:
+            self._update_cutscene()
             return
 
         if self.state != self.PLAYING:
@@ -1611,6 +1634,7 @@ class Game:
         elif self.state==self.CONTINUE_PROMPT:  self._draw_continue()
         elif self.state==self.GAME_OVER:        self._draw_game_over()
         elif self.state==self.VICTORY:          self._draw_victory()
+        elif self.state==self.CUTSCENE:         self._draw_cutscene()
         screen.blit(_scanline,(0,0))
         pygame.display.flip()
 
@@ -1896,6 +1920,208 @@ class Game:
         glow_text(screen,"TODOS OS 10 SETORES LIBERTADOS",_font_md,c,W//2,H//2-28,center=True)
         glow_text(screen,f"PONTUAÇÃO FINAL: {self.score:07d}",_font_md,c,W//2,H//2+18,center=True)
         glow_text(screen,"ENTER — MENU PRINCIPAL",_font_sm,dim(c,0.55),W//2,H//2+68,center=True)
+
+
+    # ── Cutscene: Fim do Capítulo I ───────────────────────────────────────────
+
+    def _start_cutscene(self):
+        self.state          = self.CUTSCENE
+        self.cutscene_timer = 0
+        self.ct_px          = float(W // 2)
+        self.ct_py          = float(H - 120)
+        self.ct_bangle      = 0.0
+
+    def _update_cutscene(self):
+        PI2 = 2 * math.pi
+        update_stars(self.stars)
+        self.cutscene_timer += 1
+        self.ct_bangle += 0.022
+        t = self.cutscene_timer / FPS
+
+        for p in self.particles:
+            p[0]+=p[2]; p[1]+=p[3]; p[4]-=1/FPS
+        self.particles = [p for p in self.particles if p[4]>0]
+
+        if t < 4 and self.cutscene_timer % 10 == 0:
+            bx = W//2 + math.sin(self.ct_bangle*3)*30
+            spawn_particles(self.particles, bx+random.uniform(-12,12),
+                            130+random.uniform(-8,8), PHASES[9]['bc'], n=10, spd=3.5)
+        elif 4 <= t < 8 and self.cutscene_timer % 16 == 0:
+            spawn_particles(self.particles, W//2, 130, (200,0,255), n=14, spd=6)
+        elif 8 <= t < 14 and self.cutscene_timer % 7 == 0:
+            spawn_particles(self.particles,
+                            W//2+random.uniform(-25,25), H//2+random.uniform(-25,25),
+                            PHASES[9]['ui'], n=7, spd=5)
+
+        if t >= 14:
+            prog  = min(1.0, (t - 14) / 11.0)
+            angle = -math.pi/2 + prog * 5 * PI2
+            radius = max(0.0, (1.0 - prog) * 200)
+            self.ct_px = W//2 + math.cos(angle)*radius*(1-prog*0.5)
+            self.ct_py = (H-120) + (H//2-(H-120))*prog + math.sin(angle)*radius*0.35
+            if self.cutscene_timer % 5 == 0 and prog < 0.88:
+                spawn_particles(self.particles, self.ct_px, self.ct_py,
+                                PHASES[9]['ui'], n=4, spd=1.5)
+
+        if self.cutscene_timer >= FPS * 30:
+            save_hs(self.score)
+            self.highscore = max(self.highscore, self.score)
+            self.state = self.VICTORY
+
+    def _draw_cutscene(self):
+        PI2 = 2 * math.pi
+        ct  = self.cutscene_timer
+        t   = ct / FPS
+        c   = PHASES[9]['ui']
+        W2, H2 = W//2, H//2
+
+        screen.fill(PHASES[9]['bg'])
+        draw_stars(screen, self.stars, PHASES[9]['star'])
+
+        def _ps():
+            for p in self.particles:
+                a=p[4]/p[5]; sc=dim(p[6],a)
+                sx,sy=int(p[0]),int(p[1])
+                if 0<=sx<W and 0<=sy<H: screen.set_at((sx,sy),sc)
+
+        def _dark(alpha):
+            ds=pygame.Surface((W,H),pygame.SRCALPHA)
+            ds.fill((0,0,0,max(0,min(255,int(alpha)))))
+            screen.blit(ds,(0,0))
+
+        def _panel(title, sub='', fade=255):
+            py_p = H - 90
+            bg_p = pygame.Surface((W,82),pygame.SRCALPHA)
+            bg_p.fill((0,0,0,120))
+            screen.blit(bg_p,(0,py_p-4))
+            pygame.draw.line(screen,dim(c,0.38),(0,py_p-4),(W,py_p-4),1)
+            _cs_text(screen,title,_font_md,c,W2,py_p+2,fade,center=True)
+            if sub:
+                _cs_text(screen,sub,_font_sm,dim(c,0.55),W2,py_p+32,fade,center=True)
+
+        # ── Cena 0 (0-4s): BATALHA FINAL ─────────────────────────────────────
+        if t < 4:
+            fade = min(255, int(255*t/0.6))
+            bx = W2 + math.sin(self.ct_bangle*3)*6
+            hp_rem = max(1, int(750*(1-t/4)))
+            draw_boss(screen, bx, 130, c, hp_rem, 9, 1 if ct%8<5 else 0)
+            draw_player(screen, int(self.ct_px), int(self.ct_py), c)
+            _ps()
+            _panel("SETOR ZERO — BATALHA FINAL",
+                   "O SOBERANO ZERO ESTÁ PRESTES A CAIR...", fade)
+
+        # ── Cena 1 (4-8s): O DISPOSITIVO ──────────────────────────────────────
+        elif t < 8:
+            p_l = (t-4)/4.0
+            fade = min(255, int(255*(t-4)/0.5))
+            dev_col = (int(c[0]*(1-p_l)+200*p_l),
+                       int(c[1]*(1-p_l*0.9)),
+                       int(c[2]*(1-p_l*0.4)+255*p_l*0.4))
+            bx = W2 + math.sin(self.ct_bangle*2)*4
+            draw_boss(screen, bx, 130, dev_col, 10, 9, 1 if int(t*6)%2==0 else 0)
+            draw_player(screen, int(self.ct_px), int(self.ct_py), c)
+            ring_s = pygame.Surface((W,H),pygame.SRCALPHA)
+            for ri in range(3):
+                rr = int(50+p_l*140+ri*18)
+                ra = max(0, int((140-ri*40)*(1-p_l*0.6)))
+                pygame.draw.circle(ring_s,(200,0,255,ra),(int(bx),130),rr,2)
+            screen.blit(ring_s,(0,0))
+            _ps()
+            if p_l < 0.55:
+                _panel("PERCEBENDO QUE A DERROTA ERA INEVITÁVEL...", '', fade)
+            else:
+                _panel("O SOBERANO ATIVOU UM DISPOSITIVO PROIBIDO",
+                       "UM RASGO NAS LEIS DO ESPAÇO-TEMPO", fade)
+
+        # ── Cena 2 (8-14s): DISTORÇÃO DIMENSIONAL ────────────────────────────
+        elif t < 14:
+            p_l = (t-8)/6.0
+            fade = min(255, int(255*(t-8)/0.5))
+            _dark(60*p_l)
+            bxi = int(W2+math.sin(self.ct_bangle)*10*(1-p_l))
+            byi = int(130+(H2-130)*p_l*0.6)
+            draw_boss(screen, bxi, byi, dim(c,max(0.05,1-p_l*0.85)), 5, 9, 1)
+            ex = W2+math.sin(p_l*PI2*1.5)*70
+            ey = H-120-p_l*20
+            draw_player(screen, int(ex), int(ey), c)
+            ring_s2 = pygame.Surface((W,H),pygame.SRCALPHA)
+            for ri in range(6):
+                tr = (p_l+ri*0.17)%1.0
+                rr2 = int(tr*340); ra2 = max(0,int(160*(1-tr)))
+                pygame.draw.circle(ring_s2,(*c,ra2),(W2,H2),rr2,1)
+                pygame.draw.circle(ring_s2,(180,0,255,ra2//3),(W2,H2),rr2+6,1)
+            screen.blit(ring_s2,(0,0))
+            _ps()
+            sub_txt = ("O DISPOSITIVO DISTORCEU O ESPAÇO-TEMPO"
+                       if p_l < 0.5 else "UM BURACO NEGRO ARTIFICIAL FOI CRIADO...")
+            _panel(sub_txt, '', fade)
+
+        # ── Cena 3 (14-20s): O BURACO NEGRO ──────────────────────────────────
+        elif t < 20:
+            p_l  = (t-14)/6.0
+            fade = min(255, int(255*(t-14)/0.5))
+            bh_r = int(20+p_l*110)
+            bh_s = pygame.Surface((W,H),pygame.SRCALPHA)
+            for ri in range(7):
+                gr = bh_r+ri*9+int(3*math.sin(t*4+ri))
+                ga = max(0,int((90-ri*11)*(0.5+0.5*math.sin(t*3+ri))))
+                pygame.draw.circle(bh_s,(*c,ga),(W2,H2),gr,2)
+                pygame.draw.circle(bh_s,(180,0,255,ga//3),(W2,H2),gr+3,1)
+            pygame.draw.circle(bh_s,(0,0,0,255),(W2,H2),bh_r)
+            screen.blit(bh_s,(0,0))
+            str_s = pygame.Surface((W,H),pygame.SRCALPHA)
+            for si in range(14):
+                ang = PI2*si/14+t*0.4
+                r1=bh_r+12; r2=bh_r+12+int(p_l*90)
+                sa = int(80*p_l)
+                pygame.draw.line(str_s,(*dim(c,0.45),sa),
+                    (W2+int(math.cos(ang)*r1),H2+int(math.sin(ang)*r1)),
+                    (W2+int(math.cos(ang)*r2),H2+int(math.sin(ang)*r2)),1)
+            screen.blit(str_s,(0,0))
+            draw_player(screen, int(self.ct_px), int(self.ct_py),
+                        dim(c,max(0.2,1-p_l*0.4)))
+            _ps()
+            _panel("A NAVE L1 NÃO TEVE COMO ESCAPAR...",
+                   "PILOTO L.O.M FOI SUGADO PARA OS CONFINS DO UNIVERSO", fade)
+
+        # ── Cena 4 (20-25s): SUGADO PELO BURACO NEGRO ────────────────────────
+        elif t < 25:
+            p_l  = (t-20)/5.0
+            bh_r = 130+int(p_l*50)
+            bh_s2 = pygame.Surface((W,H),pygame.SRCALPHA)
+            for ri in range(8):
+                pulse = 1+0.15*math.sin(t*5+ri)
+                gr = int((bh_r+ri*9)*pulse)
+                ga = max(0,int((80-ri*9)*(1-p_l*0.5)))
+                pygame.draw.circle(bh_s2,(*c,ga),(W2,H2),gr,2)
+            pygame.draw.circle(bh_s2,(0,0,0,255),(W2,H2),bh_r)
+            screen.blit(bh_s2,(0,0))
+            _ps()
+            if p_l < 0.82:
+                draw_player(screen,int(self.ct_px),int(self.ct_py),
+                            dim(c,max(0.05,1-p_l*1.1)))
+            elif p_l < 0.95:
+                fa = int(255*(p_l-0.82)/0.13)
+                fs2=pygame.Surface((W,H),pygame.SRCALPHA)
+                fs2.fill((255,255,255,fa)); screen.blit(fs2,(0,0))
+            _dark(min(255,255*((p_l-0.65)/0.35)) if p_l>0.65 else 0)
+
+        # ── Cena 5 (25-30s): A SAGA CONTINUA ─────────────────────────────────
+        else:
+            p_l    = min(1.0,(t-25)/5.0)
+            fade_in = min(255,int(255*p_l*2))
+            screen.fill((0,0,0))
+            cyc_c = PHASES[int(t*1.4)%len(PHASES)]['ui']
+            pulse = 0.72+0.28*math.sin(t*2.8)
+            _cs_text(screen,"FIM DO CAPÍTULO  I",
+                     _font_sm,dim(c,0.45),W2,H2-110,fade_in,center=True)
+            _cs_text(screen,"A AVENTURA CONTINUA EM...",
+                     _font_md,dim(c,0.75),W2,H2-64,fade_in,center=True)
+            _cs_text(screen,"PULSAR: DIMENSÃO SETOR ZERO",
+                     _font_lg,dim(cyc_c,pulse),W2,H2-10,fade_in,center=True)
+            if p_l>0.4 and int(t*1.4)%2:
+                _cs_text(screen,"ENTER — PROSSEGUIR",
+                         _font_sm,dim(c,0.5),W2,H2+66,fade_in,center=True)
 
 
 # ── Entrada ────────────────────────────────────────────────────────────────────
